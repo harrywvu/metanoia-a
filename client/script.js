@@ -24,6 +24,13 @@ function handleVideoChange(e) {
 
     if (!file) return;
 
+    // Check file type
+    if (!isAllowedVideo(file)) {
+        showError('Invalid video format. Please upload MP4, MOV, AVI, or MKV. (MP4 works best to avoid random issues.)');
+        videoInput.value = '';
+        return;
+    }
+
     // Check file size
     if (file.size > MAX_FILE_SIZE) {
         showError(`File size is too large. Maximum size is 30 MB, but your file is ${formatFileSize(file.size)}`);
@@ -69,6 +76,11 @@ function handleFormSubmit(e) {
     // Validate inputs
     if (!file) {
         showError('Please select a video file.');
+        return;
+    }
+
+    if (!isAllowedVideo(file)) {
+        showError('Invalid video format. Please upload MP4, MOV, AVI, or MKV. (MP4 works best to avoid random issues.)');
         return;
     }
 
@@ -195,4 +207,26 @@ function formatFileSize(bytes) {
     const i = Math.floor(Math.log(bytes) / Math.log(k));
 
     return Math.round((bytes / Math.pow(k, i)) * 100) / 100 + ' ' + sizes[i];
+}
+
+/**
+ * Check allowed video formats
+ */
+function isAllowedVideo(file) {
+    const allowedExtensions = ['mp4', 'mov', 'avi', 'mkv'];
+    const allowedMimeTypes = [
+        'video/mp4',
+        'video/quicktime',
+        'video/x-msvideo',
+        'video/x-matroska'
+    ];
+
+    const name = (file.name || '').toLowerCase();
+    const ext = name.includes('.') ? name.split('.').pop() : '';
+    const type = (file.type || '').toLowerCase();
+
+    const extOk = ext && allowedExtensions.includes(ext);
+    const mimeOk = type && allowedMimeTypes.includes(type);
+
+    return Boolean(extOk || mimeOk);
 }
