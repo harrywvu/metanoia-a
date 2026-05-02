@@ -1,0 +1,38 @@
+VIBE LOCAL STARTUP CHECKLIST
+==============================
+
+1. Navigate to VIBE directory
+   cd ~/ai-learning-py/metanoia-a/VIBE
+
+2. Activate conda environment
+   conda activate vibe-env
+
+3. Verify GPU and Python are correct (optional but good habit)
+   python -c "import torch; print(torch.__version__); print(torch.cuda.is_available())"
+   → should print 1.8.1+cu111 and True
+
+4. Run the demo
+   python demo.py --vid_file sample_video.mp4 --output_folder output/ \
+     --tracker_batch_size 4 --vibe_batch_size 64 --display
+
+   → drop --display if you don't need the live preview window
+
+5. (Optional) Export to FBX for Blender/Unity
+   export LD_LIBRARY_PATH=/home/harrywvu/.conda/envs/vibe-env/lib/python3.7/site-packages/numpy.libs:$LD_LIBRARY_PATH
+
+   ~/blender-2.83.20-linux-x64/blender --background --python lib/utils/fbx_output.py -- --input output/sample_video/vibe_output.pkl --output output/sample_video/fbx_output.fbx --fps_source 30 --fps_target 30 --gender female --person_id 1
+   ~/blender-2.83.20-linux-x64/blender --background --python lib/utils/fbx_output.py -- --input output/sample_video/vibe_output.pkl --output output/sample_video/fbx_output.fbx --fps_source 30 --fps_target 30 --gender male --person_id 1
+
+   → change --gender and --person_id as needed
+   → change *.fbx to *.glb for glTF format instead
+
+   COMMAND TO BE EXECUTED ON IMAGE:
+   python demo.py --vid_file "*video directory*" --output_folder output/ --tracker_batch_size 4 --vibe_batch_size 64
+
+NOTES
+==============================
+- Always activate vibe-env before running anything
+- To use your own video, replace sample_video.mp4 with your file path
+- To check person IDs in output:
+  python -c "import joblib; d = joblib.load('output/sample_video/vibe_output.pkl'); print(list(d.keys()))"
+- If VRAM runs out, lower --vibe_batch_size further (try 32)
