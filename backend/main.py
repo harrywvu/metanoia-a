@@ -1,17 +1,30 @@
 import logging
 import boto3
 import os
+import time
 import uuid
+from contextlib import asynccontextmanager
+from datetime import datetime, timezone
 from botocore.config import Config
 from dotenv import load_dotenv
 
 logging.basicConfig(level=logging.INFO)
 load_dotenv()
 
-from fastapi import FastAPI, UploadFile, File, Form, HTTPException, status
+from fastapi import BackgroundTasks, FastAPI, UploadFile, File, Form, HTTPException, status
 from fastapi.middleware.cors import CORSMiddleware
+from pydantic import BaseModel
 
-app = FastAPI()
+from db import create_job, get_job, init_db, update_job_status
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    init_db()
+    yield
+
+
+app = FastAPI(lifespan=lifespan)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -31,6 +44,16 @@ s3 = boto3.client(
 )
 
 BUCKET = os.getenv("R2_BUCKET_NAME")
+
+
+class ProcessRequest(BaseModel):
+    r2_key: str
+
+
+def process_job(job_id: str) -> None:
+    update_job_status(job_id, "processing")
+    time.sleep(5)
+    update_job_status(job_id, "done")
 
 
 @app.get("/")
@@ -66,3 +89,28 @@ async def upload(video: UploadFile = File(...), gender: str = Form(...)):
     logging.info(f"Uploaded to: {object_url}")
 
     return {"ok": True, "key": key, "url": object_url}
+
+
+@app.post("/process")
+async def process(request: ProcessRequest, background_tasks: BackgroundTasks):
+    job_id = str(uuid.uuid4())
+    created_at = datetime.now(timezone.utc).isoformat()
+
+    create_job(
+        job_id=job_id,
+        input_r2_key=request.r2_key,
+        status="pending",
+        created_at=created_at,
+    )
+    background_tasks.add_task(process_job, job_id)
+
+    return {"job_id": job_id}
+
+
+@app.get("/job/{job_id}")
+async def job_status(job_id: str):
+    job = get_job(job_id)
+    if job is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Job not found")
+
+    return job
