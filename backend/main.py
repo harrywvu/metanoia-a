@@ -1,7 +1,9 @@
 import logging
 import boto3
 import os
-import time
+import shutil
+import subprocess
+import tempfile
 import uuid
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
@@ -15,7 +17,7 @@ from fastapi import BackgroundTasks, FastAPI, UploadFile, File, Form, HTTPExcept
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
-from db import create_job, get_job, init_db, update_job_status
+from db import create_job, get_job, init_db, update_job_error, update_job_status
 
 
 @asynccontextmanager
@@ -50,10 +52,114 @@ class ProcessRequest(BaseModel):
     r2_key: str
 
 
-def process_job(job_id: str) -> None:
-    update_job_status(job_id, "processing")
-    time.sleep(5)
-    update_job_status(job_id, "done")
+def fail_job(job_id: str, error: str) -> None:
+    update_job_status(job_id, "failed")
+    update_job_error(job_id, error)
+
+
+def get_subprocess_error(result: subprocess.CompletedProcess[str]) -> str:
+    return (result.stderr or result.stdout or "Subprocess failed").strip()
+
+
+def process_job(job_id: str, r2_key: str) -> None:
+    temp_dir = tempfile.mkdtemp()
+    video_name = os.path.basename(r2_key)
+    _, video_ext = os.path.splitext(video_name)
+    video_stem = job_id
+    temp_video_path = os.path.join(temp_dir, f"{job_id}.mp4")
+    backend_dir = os.path.dirname(os.path.abspath(__file__))
+    vibe_dir = os.path.normpath(os.path.join(backend_dir, "..", "VIBE"))
+    blender_path = os.path.join(
+        os.path.expanduser("~"),
+        "blender-2.83.20-linux-x64",
+        "blender",
+    )
+    fbx_script_path = os.path.join(vibe_dir, "lib", "utils", "fbx_output.py")
+    gender = r2_key.split("/", 1)[0]
+
+    try:
+        if video_ext.lower() != ".mp4":
+            raise ValueError(f"Expected an .mp4 input key, got: {r2_key}")
+
+        try:
+            s3.download_file(BUCKET, r2_key, temp_video_path)
+        except Exception as exc:
+            logging.error(f"R2 download failed for key {r2_key}: {exc}")
+            raise
+        logging.info(f"Video downloaded successfully to {temp_video_path}")
+
+        update_job_status(job_id, "processing")
+
+        vibe_output_dir = os.path.join(vibe_dir, "output", video_stem)
+        vibe_result = subprocess.run(
+            [
+                "/home/harrywvu/.conda/envs/vibe-env/bin/python",
+                "demo.py",
+                "--vid_file",
+                temp_video_path,
+                "--output_folder",
+                "output/",
+                "--tracker_batch_size",
+                "4",
+                "--vibe_batch_size",
+                "64",
+            ],
+            cwd=vibe_dir,
+            capture_output=True,
+            text=True,
+        )
+        if vibe_result.returncode != 0:
+            logging.error(
+                f"VIBE subprocess failed with exit code {vibe_result.returncode}: {vibe_result.stderr}"
+            )
+            fail_job(job_id, get_subprocess_error(vibe_result))
+            return
+        logging.info(f"VIBE completed successfully with output directory {vibe_output_dir}")
+
+        blender_env = os.environ.copy()
+        blender_env["LD_LIBRARY_PATH"] = (
+            "/home/harrywvu/.conda/envs/vibe-env/lib/python3.7/site-packages/numpy.libs"
+        )
+        vibe_output_path = os.path.join(vibe_output_dir, "vibe_output.pkl")
+        fbx_output_path = os.path.join(vibe_output_dir, "fbx_output.fbx")
+        blender_result = subprocess.run(
+            [
+                blender_path,
+                "--background",
+                "--python",
+                fbx_script_path,
+                "--",
+                "--input",
+                vibe_output_path,
+                "--output",
+                fbx_output_path,
+                "--fps_source",
+                "30",
+                "--fps_target",
+                "30",
+                "--gender",
+                gender,
+                "--person_id",
+                "1",
+            ],
+            cwd=vibe_dir,
+            env=blender_env,
+            capture_output=True,
+            text=True,
+        )
+        if blender_result.returncode != 0:
+            logging.error(
+                f"Blender subprocess failed with exit code {blender_result.returncode}: {blender_result.stderr}"
+            )
+            fail_job(job_id, get_subprocess_error(blender_result))
+            return
+        logging.info(f"Blender completed successfully with FBX path {fbx_output_path}")
+
+        update_job_status(job_id, "done")
+    except Exception as exc:
+        fail_job(job_id, str(exc))
+    finally:
+        shutil.rmtree(temp_dir, ignore_errors=True)
 
 
 @app.get("/")
@@ -102,7 +208,7 @@ async def process(request: ProcessRequest, background_tasks: BackgroundTasks):
         status="pending",
         created_at=created_at,
     )
-    background_tasks.add_task(process_job, job_id)
+    background_tasks.add_task(process_job, job_id, request.r2_key)
 
     return {"job_id": job_id}
 
