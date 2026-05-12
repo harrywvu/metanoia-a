@@ -78,3 +78,16 @@ def update_job_error(job_id: str, error: str) -> None:
             (error, job_id),
         )
         conn.commit()
+
+
+def update_job_output_fbx_key(job_id: str, output_fbx_key: str) -> None:
+    with sqlite3.connect(DB_PATH) as conn:
+        conn.execute(
+            """
+            UPDATE jobs
+            SET output_fbx_key = ?
+            WHERE job_id = ?
+            """,
+            (output_fbx_key, job_id),
+        )
+        conn.commit()

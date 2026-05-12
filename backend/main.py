@@ -1,7 +1,6 @@
 import logging
 import boto3
 import os
-import shutil
 import subprocess
 import tempfile
 import uuid
@@ -17,7 +16,14 @@ from fastapi import BackgroundTasks, FastAPI, UploadFile, File, Form, HTTPExcept
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
-from db import create_job, get_job, init_db, update_job_error, update_job_status
+from db import (
+    create_job,
+    get_job,
+    init_db,
+    update_job_error,
+    update_job_output_fbx_key,
+    update_job_status,
+)
 
 
 @asynccontextmanager
@@ -155,11 +161,19 @@ def process_job(job_id: str, r2_key: str) -> None:
             return
         logging.info(f"Blender completed successfully with FBX path {fbx_output_path}")
 
+        output_fbx_key = f"results/{job_id}/fbx_output.fbx"
+        try:
+            s3.upload_file(fbx_output_path, BUCKET, output_fbx_key)
+        except Exception as exc:
+            logging.error(f"R2 upload failed for local path {fbx_output_path}: {exc}")
+            fail_job(job_id, str(exc))
+            return
+
+        update_job_output_fbx_key(job_id, output_fbx_key)
         update_job_status(job_id, "done")
+        os.remove(temp_video_path)
     except Exception as exc:
         fail_job(job_id, str(exc))
-    finally:
-        shutil.rmtree(temp_dir, ignore_errors=True)
 
 
 @app.get("/")
