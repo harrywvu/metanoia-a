@@ -3,68 +3,352 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Video Upload - VIBE</title>
+    <title>Metanoia</title>
+    <link href="https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=Inter:wght@300;400;500;600&display=swap" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/css2?family=Noto+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <script type="module" src="https://unpkg.com/@lottiefiles/dotlottie-wc@0.9.14/dist/dotlottie-wc.js"></script>
     <link rel="stylesheet" href="style.css">
     <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/loaders/GLTFLoader.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
 </head>
 <body>
-    <div class="container">
-        <div class="form-wrapper">
-            <h1>Video Upload Form</h1>
-            
-            <form id="uploadForm" method="POST" enctype="multipart/form-data">
-                <div class="form-group">
-                    <label for="videoInput">Upload Video:</label>
-                    <input 
-                        type="file" 
-                        id="videoInput" 
-                        name="video" 
-                        accept="video/*"
-                        required
-                    >
-                    <span class="help-text">Maximum 30 MB, must be less than 10 seconds. Accepted: MP4, MOV, AVI, MKV (MP4 works best to avoid random issues).</span>
+    <header class="site-header">
+        <div class="header-inner">
+            <a class="brand" href="#hero" data-scroll-target="hero">
+                <img src="assets/metanoia-logo.png" alt="Metanoia logo" class="brand-logo">
+                <span>Metanoia</span>
+            </a>
+
+            <nav class="site-nav" aria-label="Primary">
+                <a href="#hero" data-scroll-target="hero">Home</a>
+                <a href="#about" data-scroll-target="about">About</a>
+                <a href="#how-it-works" data-scroll-target="how-it-works">How It Works</a>
+                <a href="https://github.com/" target="_blank" rel="noreferrer noopener">GitHub</a>
+            </nav>
+        </div>
+    </header>
+
+    <main class="page">
+        <section id="hero" class="hero-section">
+            <div class="hero-copy section-enter section-delay-1">
+                <p class="section-label">AI-POWERED MOTION CAPTURE</p>
+                <h1>Turn movement into animation.</h1>
+                <p class="hero-subtitle">
+                    Upload a video. Get a game-ready 3D animation. Powered by VIBE and built for creators.
+                </p>
+                <button type="button" class="button-primary hero-cta" data-scroll-target="upload">
+                    Start Processing <span aria-hidden="true">→</span>
+                </button>
+            </div>
+
+            <div class="terminal-card section-enter section-delay-2" aria-hidden="true">
+                <div class="terminal-chrome">
+                    <span></span>
+                    <span></span>
+                    <span></span>
                 </div>
-
-                <div class="form-group">
-                    <label for="genderSelect">Gender:</label>
-                    <select id="genderSelect" name="gender" required>
-                        <option value="">-- Select Gender --</option>
-                        <option value="male">Male</option>
-                        <option value="female">Female</option>
-                    </select>
+                <div class="terminal-body">
+                    <p class="terminal-line">$ metanoia process --input walk.mp4 --gender male</p>
+                    <p class="terminal-line terminal-line-success">✓ Uploading video...</p>
+                    <p class="terminal-line terminal-line-success">✓ Running pose estimation...</p>
+                    <p class="terminal-line terminal-line-success">✓ Exporting FBX + glTF...</p>
+                    <p class="terminal-line terminal-line-success">✓ Done. Output ready in 2m 14s</p>
                 </div>
+            </div>
+        </section>
 
-                <button type="submit" class="btn-submit">Upload</button>
-            </form>
+        <section id="upload" class="upload-section section-enter section-delay-2">
+            <div class="upload-card">
+                <p class="section-label">Upload</p>
+                <h2>Submit your video.</h2>
 
-            <div id="loadingSection" class="loading-section hidden">
-                <div class="loading-spinner" aria-hidden="true"></div>
-                <h3>Processing your motion capture...</h3>
+                <form id="uploadForm" method="POST" enctype="multipart/form-data">
+                    <div class="form-group">
+                        <label for="videoInput">Video file</label>
+                        <div class="dropzone-shell">
+                            <div class="dropzone-content">
+                                <div class="dropzone-copy">
+                                    <p id="fileInputLabel" class="dropzone-title">Drop a video here or browse</p>
+                                    <p class="dropzone-meta">Maximum 100 MB. Accepted: MP4, MOV, AVI, MKV.</p>
+                                </div>
+                                <div class="dropzone-badge" hidden></div>
+                            </div>
+                            <input type="file" id="videoInput" name="video" accept="video/*" required>
+                        </div>
+                        <span class="help-text">Keep the clip under 30 seconds and under 100 MB. MP4 works best to avoid random issues.</span>
+                    </div>
+
+                    <div class="form-group">
+                        <label for="genderSelect">Gender</label>
+                        <div class="segmented-control" role="group" aria-label="Gender">
+                            <button type="button" class="segment-button" data-gender-value="male">Male</button>
+                            <button type="button" class="segment-button" data-gender-value="female">Female</button>
+                        </div>
+                        <input type="hidden" id="genderSelect" name="gender" required>
+                    </div>
+
+                    <button type="submit" class="button-primary button-submit">Start Processing</button>
+                </form>
+
+                <div id="errorMessage" class="message message-error" aria-live="polite"></div>
+                <div id="successMessage" class="message message-success" aria-live="polite"></div>
+            </div>
+        </section>
+
+        <section id="loading" class="loading-stage hidden">
+            <div id="loadingSection" class="loading-card section-enter">
+                <div class="loading-ring" aria-hidden="true"></div>
+                <h2>Processing your motion capture…</h2>
+                <div class="progress-stepper" aria-label="Job progress">
+                    <div class="progress-step" data-step="1" data-step-index="1">
+                        <span class="progress-dot" aria-hidden="true"></span>
+                        <span class="progress-label">Upload</span>
+                    </div>
+                    <div class="progress-step" data-step="2" data-step-index="2">
+                        <span class="progress-dot" aria-hidden="true"></span>
+                        <span class="progress-label">Pose Estimation</span>
+                    </div>
+                    <div class="progress-step" data-step="3" data-step-index="3">
+                        <span class="progress-dot" aria-hidden="true"></span>
+                        <span class="progress-label">Export</span>
+                    </div>
+                    <div class="progress-step" data-step="4" data-step-index="4">
+                        <span class="progress-dot" aria-hidden="true"></span>
+                        <span class="progress-label">Done</span>
+                    </div>
+                </div>
                 <p id="statusText">Waiting to start...</p>
             </div>
+        </section>
 
-            <div id="errorMessage" class="error-message"></div>
-            <div id="successMessage" class="success-message"></div>
+        <section id="result" class="result-stage hidden">
+            <div id="resultSection" class="result-grid">
+                <div class="viewer-panel section-enter">
+                    <canvas id="viewer"></canvas>
+                    <div id="viewerHint" class="viewer-hint" aria-hidden="true">
+                        Drag orbit · Scroll zoom · Right-click pan
+                    </div>
+                </div>
 
-            <div id="videoPreview" class="video-preview hidden">
-                <h3>Video Details:</h3>
-                <p><strong>File Name:</strong> <span id="previewFileName"></span></p>
-                <p><strong>File Size:</strong> <span id="previewFileSize"></span></p>
-                <p><strong>Duration:</strong> <span id="previewDuration"></span></p>
-                <p><strong>Gender:</strong> <span id="previewGender"></span></p>
+                <aside class="result-card section-enter section-delay-1">
+                    <p class="section-label">Result</p>
+                    <h2>Animation ready.</h2>
+                    <p class="result-summary">
+                        Preview the generated motion, inspect the job metadata, then export the final FBX.
+                    </p>
+
+                    <div class="job-meta">
+                        <div class="meta-row">
+                            <span>Job ID</span>
+                            <div class="meta-value-group">
+                                <strong id="resultJobId">—</strong>
+                                <button type="button" id="copyJobIdButton" class="icon-button" aria-label="Copy job ID">⎘</button>
+                            </div>
+                        </div>
+                        <div class="meta-row">
+                            <span>Gender</span>
+                            <strong id="resultGender">—</strong>
+                        </div>
+                        <div class="meta-row">
+                            <span>Created At</span>
+                            <strong id="resultCreatedAt">—</strong>
+                        </div>
+                    </div>
+
+                    <div id="videoPreview" class="video-preview hidden">
+                        <h3>Upload Details</h3>
+                        <p><strong>File Name</strong><span id="previewFileName"></span></p>
+                        <p><strong>File Size</strong><span id="previewFileSize"></span></p>
+                        <p><strong>Duration</strong><span id="previewDuration"></span></p>
+                        <p><strong>Gender</strong><span id="previewGender"></span></p>
+                    </div>
+
+                    <div class="result-actions">
+                        <div class="segmented-control format-toggle" role="group" aria-label="Download format">
+                            <button type="button" class="segment-button active" data-format-value="fbx">FBX</button>
+                            <button type="button" class="segment-button" data-format-value="gltf">glTF</button>
+                        </div>
+                        <p id="formatDescription" class="format-description">FBX - Autodesk format, compatible with Maya, 3ds Max, Unreal Engine</p>
+                        <button type="button" id="downloadButton" class="button-primary">Download</button>
+                        <button type="button" id="resetButton" class="button-ghost">Process Another Video</button>
+                    </div>
+                </aside>
+            </div>
+        </section>
+
+        <section id="how-it-works" class="info-section info-section-split">
+            <div class="info-copy section-enter">
+                <p class="section-label">How It Works</p>
+                <h2>Motion capture, packaged for production.</h2>
+                <p>
+                    Metanoia takes your source clip through a compact motion-processing pipeline built for speed and usable output. We use VIBE for human pose estimation, transform the recovered motion in Blender, and export both FBX and glTF for game engines, DCC tools, and review workflows.
+                </p>
+                <p>
+                    Finished assets are stored on Cloudflare R2 so they can be delivered quickly to the viewer and download actions in the app.
+                </p>
+                <p>
+                    When your motion capture finishes, we send a rich Discord notification with download links. You can set up a webhook to get real-time updates in your server.
+                </p>
             </div>
 
-            <div id="resultSection" class="hidden">
-                <canvas id="viewer" style="width:100%;height:500px;"></canvas>
-                <div class="result-actions">
-                    <button type="button" id="downloadFbxButton" class="btn-download">Download FBX</button>
-                    <button type="button" id="resetButton" class="btn-secondary">Process another video</button>
+            <div class="terminal-card terminal-card-secondary section-enter section-delay-1">
+                <div class="terminal-chrome">
+                    <span></span>
+                    <span></span>
+                    <span></span>
+                </div>
+                <div class="terminal-body pipeline-terminal">
+                    <p class="terminal-line">pipeline:</p>
+                    <button type="button" class="pipeline-step terminal-line terminal-line-success" data-pipeline-step="ingest">
+                        <span class="pipeline-command">✓ ingest video</span>
+                        <span class="pipeline-detail"><span aria-hidden="true">│</span> Your source clip is downloaded from Cloudflare R2 and passed to the pipeline.</span>
+                    </button>
+                    <button type="button" class="pipeline-step terminal-line terminal-line-success" data-pipeline-step="vibe">
+                        <span class="pipeline-command">✓ estimate motion with VIBE</span>
+                        <span class="pipeline-detail"><span aria-hidden="true">│</span> VIBE runs a deep learning model to extract 3D human pose from every frame.</span>
+                    </button>
+                    <button type="button" class="pipeline-step terminal-line terminal-line-success" data-pipeline-step="export">
+                        <span class="pipeline-command">✓ export FBX + glTF in Blender</span>
+                        <span class="pipeline-detail"><span aria-hidden="true">│</span> Blender converts the raw pose data into industry-standard animation formats.</span>
+                    </button>
+                    <button type="button" class="pipeline-step terminal-line terminal-line-success" data-pipeline-step="publish">
+                        <span class="pipeline-command">✓ publish outputs to R2</span>
+                        <span class="pipeline-detail"><span aria-hidden="true">│</span> Both files are uploaded to Cloudflare R2 and a public URL is generated.</span>
+                    </button>
                 </div>
             </div>
-        </div>
-    </div>
+        </section>
+
+        <section id="discord" class="info-section discord-section">
+            <div class="discord-layout">
+                <div class="discord-copy section-enter">
+                    <div class="discord-logo" aria-hidden="true">
+                        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 127.14 96.36">
+                            <path fill="#5865f2" d="M107.7,8.07A105.15,105.15,0,0,0,81.47,0a72.06,72.06,0,0,0-3.36,6.83A97.68,97.68,0,0,0,49,6.83,72.37,72.37,0,0,0,45.64,0,105.89,105.89,0,0,0,19.39,8.09C2.79,32.65-1.71,56.6.54,80.21h0A105.73,105.73,0,0,0,32.71,96.36,77.7,77.7,0,0,0,39.6,85.25a68.42,68.42,0,0,1-10.85-5.18c.91-.66,1.8-1.34,2.66-2a75.57,75.57,0,0,0,64.32,0c.87.71,1.76,1.39,2.66,2a68.68,68.68,0,0,1-10.87,5.19,77,77,0,0,0,6.89,11.1A105.25,105.25,0,0,0,126.6,80.22h0C129.24,52.84,122.09,29.11,107.7,8.07ZM42.45,65.69C36.18,65.69,31,60,31,53s5-12.74,11.43-12.74S54,46,53.89,53,48.84,65.69,42.45,65.69Zm42.24,0C78.41,65.69,73.25,60,73.25,53s5-12.74,11.44-12.74S96.23,46,96.12,53,91.08,65.69,84.69,65.69Z"/>
+                        </svg>
+                    </div>
+                    <p class="section-label">STAY IN THE LOOP</p>
+                    <h2>Get notified when it's done.</h2>
+                    <p>
+                        Join the Metanoia Discord server and receive a notification the moment your motion capture export is ready — with direct download links for your FBX and glTF files.
+                    </p>
+                    <a class="button-discord" href="https://discord.gg/5ts7j5zv6" target="_blank" rel="noreferrer noopener">
+                        Join the Discord Server <span aria-hidden="true">→</span>
+                    </a>
+                </div>
+
+                <div class="discord-mock section-enter section-delay-1" aria-hidden="true">
+                    <div class="discord-window">
+                        <div class="discord-channel-bar">
+                            <div class="discord-channel-left">
+                                <span class="discord-hash">#</span>
+                                <strong>general</strong>
+                            </div>
+                            <div class="discord-channel-tools">
+                                <span>🔍</span>
+                                <span>📌</span>
+                                <span>👥</span>
+                            </div>
+                        </div>
+
+                        <div class="discord-message-area">
+                            <div class="discord-message">
+                                <div class="discord-avatar">M</div>
+                                <div class="discord-message-content">
+                                    <div class="discord-username-row">
+                                        <strong>Metanoia Bot</strong>
+                                        <span class="discord-app-badge">APP</span>
+                                        <span class="discord-message-time">Today at 5:30 AM</span>
+                                    </div>
+                                    <p class="discord-message-text">Your motion capture job is complete! Download your files below.</p>
+
+                                    <div class="discord-embed-card">
+                                        <div class="discord-embed-author">
+                                            <span class="discord-embed-author-icon">🎬</span>
+                                            <span>Metanoia Pipeline</span>
+                                        </div>
+                                        <h3>✅ Motion Capture Complete</h3>
+                                        <div class="discord-fields">
+                                            <div class="discord-field">
+                                                <span>Job ID</span>
+                                                <strong>a3f9c1d8...</strong>
+                                            </div>
+                                            <div class="discord-field">
+                                                <span>Gender</span>
+                                                <strong>Male</strong>
+                                            </div>
+                                            <div class="discord-field">
+                                                <span>Status</span>
+                                                <strong>✅ Done</strong>
+                                            </div>
+                                            <div class="discord-field">
+                                                <span>Duration</span>
+                                                <strong>2m 14s</strong>
+                                            </div>
+                                        </div>
+                                        <div class="discord-links">
+                                            <a href="#" class="discord-link-button">Download FBX</a>
+                                            <a href="#" class="discord-link-button">Download glTF</a>
+                                        </div>
+                                        <p class="discord-embed-footer">🕒 Metanoia · Today at 5:30 AM</p>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+
+                        <div class="discord-message-bar">
+                            <span>Message #general</span>
+                            <div class="discord-message-actions">
+                                <span>➕</span>
+                                <span>🎁</span>
+                                <span>📷</span>
+                                <span>😀</span>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        <section id="about" class="info-section info-section-split about-section">
+            <div class="info-copy section-enter">
+                <p class="section-label">About</p>
+                <h2>Metanoia is a creator-facing motion workflow.</h2>
+                <p>
+                    The project is focused on turning ordinary video into clean, reusable animation with less setup friction. The interface stays minimal so the work stays centered on input quality, processing status, and export readiness.
+                </p>
+                <p>
+                    Team Metanoia is building the experience end to end: ingestion, processing, storage, and delivery. The goal is a pipeline that feels approachable for creators without flattening the technical depth underneath it.
+                </p>
+            </div>
+
+            <div class="lottie-grid section-enter section-delay-1">
+                <div class="lottie-card">
+                    <dotlottie-wc src="https://lottie.host/cff31fb8-ce74-4206-9c2f-54983a4d950f/QD7yPBDOan.lottie" style="width: 300px; height: 300px;" speed="1" autoplay loop></dotlottie-wc>
+                    <p>Input video processing</p>
+                </div>
+                
+                <div class="lottie-card">
+                    <dotlottie-wc src="https://lottie.host/91b72aa5-8f5e-4611-9ace-37dd194eec76/D4SlCXDSMS.lottie" style="width: 300px; height: 300px;" autoplay loop></dotlottie-wc>
+                    <p>Motion capture output</p>
+                </div>
+
+                <div class="lottie-card">
+                    <dotlottie-wc src="https://lottie.host/b9516f7f-55aa-4272-951c-5f09f6435c71/HegNXHLmY1.lottie" style="width: 300px; height: 300px;" speed="1" autoplay loop></dotlottie-wc>
+                    <p>CLI and technical pipeline</p>
+                </div>
+            </div>
+        </section>
+    </main>
+
+    <footer class="site-footer">
+        <h2>Team Metanoia</h2>
+        <p>John Harold A. Alejo</p>
+        <p>Cyrus Kirby Gaor</p>
+        <p>Joshearie Landicho</p>
+        <p>Bradley Kjiel Pasalo</p>
+    </footer>
 
     <script src="script.js"></script>
 </body>

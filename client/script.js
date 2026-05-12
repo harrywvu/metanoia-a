@@ -1,8 +1,7 @@
-// Constants
-const MAX_FILE_SIZE = 30 * 1024 * 1024; // 30 MB in bytes
-const MAX_DURATION = 30; // 30 seconds
+const MAX_FILE_SIZE = 100 * 1024 * 1024;
+const MAX_DURATION = 30;
+const STATUS_FADE_MS = 150;
 
-// DOM Elements
 const uploadForm = document.getElementById('uploadForm');
 const videoInput = document.getElementById('videoInput');
 const genderSelect = document.getElementById('genderSelect');
@@ -13,48 +12,636 @@ const loadingSection = document.getElementById('loadingSection');
 const statusText = document.getElementById('statusText');
 const resultSection = document.getElementById('resultSection');
 const viewerCanvas = document.getElementById('viewer');
-const downloadFbxButton = document.getElementById('downloadFbxButton');
+const downloadButton = document.getElementById('downloadButton');
 const resetButton = document.getElementById('resetButton');
+const uploadSection = document.getElementById('upload');
+const loadingStage = document.getElementById('loading');
+const resultStage = document.getElementById('result');
+const fileInputLabel = document.getElementById('fileInputLabel');
+const resultJobId = document.getElementById('resultJobId');
+const resultGender = document.getElementById('resultGender');
+const resultCreatedAt = document.getElementById('resultCreatedAt');
+const heroSection = document.getElementById('hero');
+const submitButton = uploadForm ? uploadForm.querySelector('.button-submit') : null;
+const dropzoneShell = document.querySelector('.dropzone-shell');
+const dropzoneBadge = dropzoneShell ? dropzoneShell.querySelector('.dropzone-badge') : null;
+const footer = document.querySelector('.site-footer');
+const genderButtons = document.querySelectorAll('[data-gender-value]');
+const formatButtons = document.querySelectorAll('[data-format-value]');
+const formatDescription = document.getElementById('formatDescription');
+const copyJobIdButton = document.getElementById('copyJobIdButton');
+const viewerHint = document.getElementById('viewerHint');
+const pipelineSteps = document.querySelectorAll('.pipeline-step');
+const navLinks = Array.from(document.querySelectorAll('.site-nav a[data-scroll-target]'));
+const progressSteps = Array.from(document.querySelectorAll('.progress-step'));
+
 let jobPollIntervalId = null;
 let activeViewer = null;
 let currentJobId = null;
 let completedJob = null;
+let statusTextTimerId = null;
+let viewerHintTimerId = null;
+let resetGuardTimerId = null;
+let lastKnownProgressStep = 1;
+let activeDownloadFormat = 'fbx';
 
-// Event Listeners
-videoInput.addEventListener('change', handleVideoChange);
-uploadForm.addEventListener('submit', handleFormSubmit);
-if (downloadFbxButton) {
-    downloadFbxButton.addEventListener('click', handleDownloadFbx);
+const FORMAT_DESCRIPTIONS = {
+    fbx: 'FBX - Autodesk format, compatible with Maya, 3ds Max, Unreal Engine',
+    gltf: 'glTF - Web-native format, compatible with Three.js, Babylon.js, Unity'
+};
+const PROGRESS_STATUS_MAP = {
+    pending: 1,
+    processing: 2,
+    running: 2,
+    exporting: 3,
+    done: 4
+};
+
+initMotionLayer();
+
+if (videoInput) {
+    videoInput.addEventListener('change', handleVideoChange);
+    videoInput.addEventListener('change', () => {
+        const file = videoInput.files && videoInput.files[0] ? videoInput.files[0] : null;
+        updateSelectedFileUI(file);
+    });
 }
+
+if (uploadForm) {
+    uploadForm.addEventListener('submit', handleFormSubmit);
+}
+
+if (downloadButton) {
+    downloadButton.addEventListener('click', handleDownload);
+}
+
 if (resetButton) {
-    resetButton.addEventListener('click', resetForNextJob);
+    resetButton.addEventListener('click', handleResetClick);
 }
 
-/**
- * Handle video file selection
- */
-function handleVideoChange(e) {
-    const target = e.target;
-    const file = (target && target.files && target.files[0]) ? target.files[0] : null;
+if (copyJobIdButton) {
+    copyJobIdButton.addEventListener('click', copyJobIdToClipboard);
+}
+
+genderButtons.forEach((button) => {
+    button.addEventListener('click', () => {
+        setGenderValue(button.dataset.genderValue || '');
+    });
+});
+
+formatButtons.forEach((button) => {
+    button.addEventListener('click', () => {
+        setDownloadFormat(button.dataset.formatValue || 'fbx');
+    });
+});
+
+pipelineSteps.forEach((step) => {
+    step.addEventListener('click', () => {
+        const isExpanded = step.classList.contains('is-expanded');
+        pipelineSteps.forEach((item) => item.classList.remove('is-expanded'));
+        if (!isExpanded) {
+            step.classList.add('is-expanded');
+        }
+    });
+});
+
+if (viewerCanvas) {
+    viewerCanvas.addEventListener('mousedown', hideViewerHint);
+}
+
+document.querySelectorAll('[data-scroll-target]').forEach((element) => {
+    element.addEventListener('click', (event) => {
+        const targetId = element.getAttribute('data-scroll-target');
+        if (!targetId) {
+            return;
+        }
+
+        event.preventDefault();
+        smoothTo(targetId);
+    });
+});
+
+function initMotionLayer() {
+    if (heroSection) {
+        heroSection.classList.add('is-visible');
+    }
+
+    [loadingStage, resultStage].forEach((section) => {
+        if (!section) {
+            return;
+        }
+
+        section.classList.remove('hidden');
+        section.classList.remove('is-visible');
+        section.style.display = 'none';
+    });
+
+    injectTerminalCursor();
+    injectLoadingEllipsis();
+    decorateAboutCards();
+    decorateFooterNames();
+    setupDropzoneInteractions();
+    setupSectionObserver();
+    setGenderValue('');
+    setDownloadFormat(activeDownloadFormat);
+    updateDownloadButtonState();
+    updateProgressStepper(1, false);
+
+    if (viewerCanvas) {
+        viewerCanvas.classList.remove('model-loaded');
+    }
+}
+
+function setupSectionObserver() {
+    if (!('IntersectionObserver' in window)) {
+        document.querySelectorAll('section').forEach((section) => {
+            section.classList.add('is-visible');
+        });
+        syncNavState('hero');
+        if (footer) {
+            footer.classList.add('is-visible');
+        }
+        return;
+    }
+
+    const observer = new IntersectionObserver((entries) => {
+        entries.forEach((entry) => {
+            if (!entry.isIntersecting) {
+                return;
+            }
+
+            entry.target.classList.add('is-visible');
+            syncNavState(entry.target.id);
+            observer.unobserve(entry.target);
+        });
+    }, { threshold: 0.1 });
+
+    document.querySelectorAll('section').forEach((section) => {
+        if (section.id === 'hero' || section === loadingStage || section === resultStage) {
+            return;
+        }
+        observer.observe(section);
+    });
+
+    if (footer) {
+        observer.observe(footer);
+    }
+
+    if ('IntersectionObserver' in window) {
+        const scrollSpyObserver = new IntersectionObserver((entries) => {
+            const visibleEntries = entries
+                .filter((entry) => entry.isIntersecting)
+                .sort((a, b) => b.intersectionRatio - a.intersectionRatio);
+
+            if (!visibleEntries.length) {
+                return;
+            }
+
+            syncNavState(visibleEntries[0].target.id);
+        }, { threshold: [0.4, 0.6, 0.8] });
+
+        document.querySelectorAll('section[id]').forEach((section) => {
+            scrollSpyObserver.observe(section);
+        });
+    }
+}
+
+function setupDropzoneInteractions() {
+    if (!dropzoneShell || !videoInput) {
+        return;
+    }
+
+    const stopDragDefaults = (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+    };
+
+    dropzoneShell.addEventListener('dragover', (event) => {
+        stopDragDefaults(event);
+        dropzoneShell.classList.add('drag-active');
+    });
+
+    dropzoneShell.addEventListener('dragleave', (event) => {
+        stopDragDefaults(event);
+        if (event.relatedTarget && dropzoneShell.contains(event.relatedTarget)) {
+            return;
+        }
+        dropzoneShell.classList.remove('drag-active');
+    });
+
+    dropzoneShell.addEventListener('drop', (event) => {
+        stopDragDefaults(event);
+        dropzoneShell.classList.remove('drag-active');
+
+        const files = event.dataTransfer && event.dataTransfer.files;
+        if (!files || !files.length) {
+            return;
+        }
+
+        const transfer = new DataTransfer();
+        Array.from(files).forEach((file) => transfer.items.add(file));
+        videoInput.files = transfer.files;
+        videoInput.dispatchEvent(new Event('change', { bubbles: true }));
+    });
+}
+
+function decorateAboutCards() {
+    document.querySelectorAll('.lottie-card').forEach((card, index) => {
+        card.classList.add(`stagger-${index + 1}`);
+    });
+}
+
+function decorateFooterNames() {
+    document.querySelectorAll('.site-footer p').forEach((name, index) => {
+        name.classList.add('footer-name', `footer-stagger-${index + 1}`);
+    });
+}
+
+function injectTerminalCursor() {
+    const terminalLines = document.querySelectorAll('#hero .terminal-line');
+    const lastLine = terminalLines[terminalLines.length - 1];
+    if (!lastLine || lastLine.querySelector('.terminal-cursor')) {
+        return;
+    }
+
+    const cursor = document.createElement('span');
+    cursor.className = 'terminal-cursor';
+    cursor.setAttribute('aria-hidden', 'true');
+    cursor.textContent = '|';
+    lastLine.appendChild(document.createTextNode(' '));
+    lastLine.appendChild(cursor);
+}
+
+function injectLoadingEllipsis() {
+    const loadingHeading = document.querySelector('#loadingSection h2');
+    if (!loadingHeading || loadingHeading.querySelector('.ellipsis')) {
+        return;
+    }
+
+    const ellipsis = document.createElement('span');
+    ellipsis.className = 'ellipsis';
+    ellipsis.setAttribute('aria-hidden', 'true');
+    loadingHeading.appendChild(ellipsis);
+}
+
+function smoothTo(id) {
+    const element = document.getElementById(id);
+    if (element) {
+        element.scrollIntoView({ behavior: 'smooth' });
+    }
+}
+
+function setSubmitLoading(isLoading) {
+    if (!submitButton) {
+        return;
+    }
+
+    submitButton.classList.toggle('btn-loading', isLoading);
+    submitButton.setAttribute('aria-busy', isLoading ? 'true' : 'false');
+}
+
+function updateSelectedFileUI(file) {
+    if (!dropzoneShell || !dropzoneBadge) {
+        return;
+    }
+
+    if (!file) {
+        if (fileInputLabel) {
+            fileInputLabel.textContent = 'Drop a video here or browse';
+        }
+        dropzoneBadge.hidden = true;
+        dropzoneBadge.innerHTML = '';
+        dropzoneShell.classList.remove('has-error');
+        dropzoneShell.classList.remove('has-selection');
+        updateSubmitButtonAvailability(false);
+        return;
+    }
+
+    if (fileInputLabel) {
+        fileInputLabel.textContent = 'File selected';
+    }
+
+    const tooLarge = file.size > MAX_FILE_SIZE;
+    dropzoneShell.classList.toggle('has-error', tooLarge);
+    dropzoneShell.classList.add('has-selection');
+    updateSubmitButtonAvailability(tooLarge);
+
+    if (tooLarge) {
+        dropzoneBadge.innerHTML = `
+            <span class="dropzone-status dropzone-status-warning" aria-hidden="true">!</span>
+            <div class="dropzone-badge-copy">
+                <strong>File too large. Max 100MB.</strong>
+                <span>${truncateFileName(file.name, 24)} · ${formatFileSizeMB(file.size)}</span>
+            </div>
+            <button type="button" class="dropzone-clear" aria-label="Clear selected file">×</button>
+        `;
+    } else {
+        dropzoneBadge.innerHTML = `
+            <span class="dropzone-status dropzone-status-success" aria-hidden="true">✓</span>
+            <div class="dropzone-badge-copy">
+                <strong>${truncateFileName(file.name, 24)}</strong>
+                <span>${truncateFileName(file.name, 24)} · ${formatFileSizeMB(file.size)}</span>
+            </div>
+            <button type="button" class="dropzone-clear" aria-label="Clear selected file">×</button>
+        `;
+    }
+
+    dropzoneBadge.hidden = false;
+
+    const clearButton = dropzoneBadge.querySelector('.dropzone-clear');
+    if (clearButton) {
+        clearButton.addEventListener('click', clearSelectedFile, { once: true });
+    }
+}
+
+function showSection(section) {
+    if (!section) {
+        return;
+    }
+
+    section.style.display = 'block';
+    requestAnimationFrame(() => {
+        requestAnimationFrame(() => {
+            section.classList.add('is-visible');
+        });
+    });
+}
+
+function hideSection(section, callback) {
+    if (!section) {
+        if (callback) {
+            callback();
+        }
+        return;
+    }
+
+    let finalized = false;
+    let fallbackTimerId = null;
+
+    const finalize = () => {
+        if (finalized) {
+            return;
+        }
+        finalized = true;
+        window.clearTimeout(fallbackTimerId);
+        section.style.display = 'none';
+        section.removeEventListener('transitionend', onTransitionEnd);
+        if (callback) {
+            callback();
+        }
+    };
+
+    const onTransitionEnd = (event) => {
+        if (event.target !== section) {
+            return;
+        }
+        finalize();
+    };
+
+    section.classList.remove('is-visible');
+    section.addEventListener('transitionend', onTransitionEnd, { once: true });
+    fallbackTimerId = window.setTimeout(finalize, 550);
+}
+
+function setSectionVisibility(section, isVisible, callback) {
+    if (isVisible) {
+        showSection(section);
+        if (callback) {
+            callback();
+        }
+        return;
+    }
+
+    hideSection(section, callback);
+}
+
+function setStatusText(message) {
+    if (!statusText || typeof message !== 'string') {
+        return;
+    }
+
+    window.clearTimeout(statusTextTimerId);
+    statusText.classList.add('fading');
+    statusTextTimerId = window.setTimeout(() => {
+        statusText.textContent = message;
+        statusText.classList.remove('fading');
+    }, STATUS_FADE_MS);
+}
+
+function setGenderValue(value) {
+    if (genderSelect) {
+        genderSelect.value = value;
+    }
+
+    genderButtons.forEach((button) => {
+        const isActive = button.dataset.genderValue === value;
+        button.classList.toggle('active', isActive);
+        button.setAttribute('aria-pressed', isActive ? 'true' : 'false');
+    });
+}
+
+function setDownloadFormat(format) {
+    activeDownloadFormat = format === 'gltf' ? 'gltf' : 'fbx';
+
+    formatButtons.forEach((button) => {
+        const isActive = button.dataset.formatValue === activeDownloadFormat;
+        button.classList.toggle('active', isActive);
+        button.setAttribute('aria-pressed', isActive ? 'true' : 'false');
+    });
+
+    if (formatDescription) {
+        formatDescription.textContent = FORMAT_DESCRIPTIONS[activeDownloadFormat];
+    }
+}
+
+function syncNavState(activeSectionId) {
+    const hasMatchingLink = navLinks.some((link) => link.dataset.scrollTarget === activeSectionId);
+    if (!hasMatchingLink) {
+        return;
+    }
+
+    navLinks.forEach((link) => {
+        const isActive = link.dataset.scrollTarget === activeSectionId;
+        link.classList.toggle('active', isActive);
+    });
+}
+
+function updateSubmitButtonAvailability(disabled) {
+    if (!submitButton) {
+        return;
+    }
+
+    submitButton.disabled = disabled;
+    submitButton.setAttribute('aria-disabled', disabled ? 'true' : 'false');
+}
+
+function clearSelectedFile(event) {
+    if (event) {
+        event.preventDefault();
+        event.stopPropagation();
+    }
+
+    if (videoInput) {
+        videoInput.value = '';
+    }
+
+    updateSelectedFileUI(null);
+    clearMessages();
+}
+
+function truncateFileName(name, limit) {
+    if (!name || name.length <= limit) {
+        return name || '';
+    }
+
+    return `${name.slice(0, Math.max(0, limit - 1)).trimEnd()}…`;
+}
+
+function formatFileSizeMB(bytes) {
+    return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+function updateProgressStepper(stepIndex, isDone) {
+    lastKnownProgressStep = Math.max(lastKnownProgressStep, stepIndex);
+
+    progressSteps.forEach((step) => {
+        const current = Number(step.dataset.step || step.dataset.stepIndex || '0');
+        step.classList.remove('is-upcoming', 'is-active', 'is-complete');
+
+        if (isDone || current < lastKnownProgressStep) {
+            step.classList.add('is-complete');
+            return;
+        }
+
+        if (current === lastKnownProgressStep) {
+            step.classList.add('is-active');
+            return;
+        }
+
+        step.classList.add('is-upcoming');
+    });
+}
+
+function updateProgressFromStatus(status) {
+    const normalizedStatus = typeof status === 'string' ? status.trim().toLowerCase() : '';
+
+    if (normalizedStatus === 'done') {
+        updateProgressStepper(4, true);
+        return;
+    }
+
+    const mappedStep = PROGRESS_STATUS_MAP[normalizedStatus] || 2;
+    updateProgressStepper(mappedStep, false);
+}
+
+function resetProgressStepper() {
+    lastKnownProgressStep = 1;
+    updateProgressStepper(1, false);
+}
+
+function updateDownloadButtonState() {
+    if (!downloadButton) {
+        return;
+    }
+
+    const label = activeDownloadFormat === 'gltf' ? 'Download glTF' : 'Download FBX';
+    downloadButton.textContent = label;
+}
+
+function handleResetClick() {
+    if (!resetButton) {
+        return;
+    }
+
+    if (resetButton.classList.contains('reset-confirm')) {
+        window.clearTimeout(resetGuardTimerId);
+        resetGuardTimerId = null;
+        resetButton.classList.remove('reset-confirm');
+        resetButton.textContent = 'Process Another Video';
+        resetForNextJob();
+        return;
+    }
+
+    resetButton.classList.add('reset-confirm');
+    resetButton.textContent = 'Are you sure? This will clear your result.';
+    resetGuardTimerId = window.setTimeout(() => {
+        if (!resetButton) {
+            return;
+        }
+        resetButton.classList.remove('reset-confirm');
+        resetButton.textContent = 'Process Another Video';
+        resetGuardTimerId = null;
+    }, 3000);
+}
+
+async function copyJobIdToClipboard() {
+    if (!copyJobIdButton || !resultJobId) {
+        return;
+    }
+
+    const jobId = resultJobId.textContent.trim();
+    if (!jobId || jobId === '—') {
+        return;
+    }
+
+    try {
+        await navigator.clipboard.writeText(jobId);
+        copyJobIdButton.textContent = '✓';
+        copyJobIdButton.classList.add('copied');
+        window.setTimeout(() => {
+            copyJobIdButton.textContent = '⎘';
+            copyJobIdButton.classList.remove('copied');
+        }, 2000);
+    } catch (error) {
+        console.error('Clipboard copy failed:', error);
+    }
+}
+
+function showViewerHint() {
+    if (!viewerHint) {
+        return;
+    }
+
+    window.clearTimeout(viewerHintTimerId);
+    viewerHint.classList.remove('is-hidden');
+    viewerHintTimerId = window.setTimeout(() => {
+        hideViewerHint();
+    }, 4000);
+}
+
+function hideViewerHint() {
+    if (!viewerHint) {
+        return;
+    }
+
+    window.clearTimeout(viewerHintTimerId);
+    viewerHint.classList.add('is-hidden');
+}
+
+function handleVideoChange(event) {
+    const target = event.target;
+    const file = target && target.files && target.files[0] ? target.files[0] : null;
     clearMessages();
 
-    if (!file) return;
+    if (!file) {
+        updateSelectedFileUI(null);
+        return;
+    }
 
-    // Check file type
     if (!isAllowedVideo(file)) {
         showError('Invalid video format. Please upload MP4, MOV, AVI, or MKV. (MP4 works best to avoid random issues.)');
         videoInput.value = '';
+        updateSelectedFileUI(null);
         return;
     }
 
-    // Check file size
     if (file.size > MAX_FILE_SIZE) {
-        showError(`File size is too large. Maximum size is 30 MB, but your file is ${formatFileSize(file.size)}`);
+        showError(`File size is too large. Maximum size is 100 MB, but your file is ${formatFileSize(file.size)}`);
         videoInput.value = '';
+        updateSelectedFileUI(null);
         return;
     }
 
-    // Check video duration
     const videoElement = document.createElement('video');
     videoElement.preload = 'metadata';
 
@@ -64,32 +651,29 @@ function handleVideoChange(e) {
         if (duration > MAX_DURATION) {
             showError(`Video duration is too long. Maximum duration is ${MAX_DURATION} seconds, but your video is ${duration.toFixed(2)} seconds`);
             videoInput.value = '';
+            updateSelectedFileUI(null);
             return;
         }
 
-        // All validations passed
         showSuccess(`Video validated successfully! (${duration.toFixed(2)}s, ${formatFileSize(file.size)})`);
     };
 
     videoElement.onerror = function () {
         showError('Unable to read video file. Please ensure it is a valid video format.');
         videoInput.value = '';
+        updateSelectedFileUI(null);
     };
 
     videoElement.src = URL.createObjectURL(file);
 }
 
-/**
- * Handle form submission
- */
-function handleFormSubmit(e) {
-    e.preventDefault();
+function handleFormSubmit(event) {
+    event.preventDefault();
     clearMessages();
 
-    const file = (videoInput && videoInput.files && videoInput.files[0]) ? videoInput.files[0] : null;
+    const file = videoInput && videoInput.files && videoInput.files[0] ? videoInput.files[0] : null;
     const gender = genderSelect ? genderSelect.value : '';
 
-    // Validate inputs
     if (!file) {
         showError('Please select a video file.');
         return;
@@ -105,30 +689,23 @@ function handleFormSubmit(e) {
         return;
     }
 
-    // Final validation checks
     if (file.size > MAX_FILE_SIZE) {
-        showError('File size exceeds 30 MB limit.');
+        showError('File size exceeds 100 MB limit.');
         return;
     }
 
-    // Display preview
+    setSubmitLoading(true);
     displayPreview(file, gender);
-    // Send request to API
     sendVideoRequest(file, gender);
 
-    // Log form data (for debugging)
-    const formData = {
+    console.log('Form Data:', {
         fileName: file.name,
         fileSize: file.size,
-        gender: gender,
+        gender,
         timestamp: new Date().toISOString()
-    };
-    console.log('Form Data:', formData);
+    });
 }
 
-/**
- * Send video to FastAPI endpoint
- */
 async function sendVideoRequest(file, gender) {
     const uploadUrl = 'http://localhost:8001/upload';
     const processUrl = 'http://localhost:8001/process';
@@ -160,6 +737,7 @@ async function sendVideoRequest(file, gender) {
             showError('Upload succeeded but response did not include an R2 key.');
             return;
         }
+
         console.log('Starting process request with key:', key);
         const processResponse = await fetch(processUrl, {
             method: 'POST',
@@ -183,9 +761,11 @@ async function sendVideoRequest(file, gender) {
             showError('Process started response did not include a job ID.');
             return;
         }
+
         currentJobId = jobId;
         console.log('Process started with job_id:', jobId);
         showLoadingState('Job created. Waiting for processing to start...');
+        updateProgressFromStatus('pending');
 
         if (jobPollIntervalId) {
             clearInterval(jobPollIntervalId);
@@ -206,32 +786,38 @@ async function sendVideoRequest(file, gender) {
                     clearInterval(jobPollIntervalId);
                     jobPollIntervalId = null;
                     showError(`Job status check failed: ${errorText || jobResponse.statusText}`);
+                    hideLoadingState();
                     return;
                 }
 
                 const job = await jobResponse.json();
+                const status = typeof job.status === 'string' ? job.status.trim().toLowerCase() : '';
                 console.log('Job status response:', job);
-                updateStatusText(job.status, job);
+                console.log(status);
+                updateStatusText(status, job);
+                updateProgressFromStatus(status);
 
-                if (job.status === 'done') {
+                if (status === 'done') {
                     clearInterval(jobPollIntervalId);
                     jobPollIntervalId = null;
                     pollingFinished = true;
                     currentJobId = null;
                     console.log('Job completed successfully');
-                    hideLoadingState();
-                    onJobComplete(job);
+                    hideLoadingState(() => {
+                        onJobComplete(job);
+                    });
                     return;
                 }
 
-                if (job.status === 'failed') {
+                if (status === 'failed') {
                     clearInterval(jobPollIntervalId);
                     jobPollIntervalId = null;
                     pollingFinished = true;
                     currentJobId = null;
                     console.error('Job failed:', job.error);
-                    hideLoadingState();
-                    showError(job.error || 'Job failed.');
+                    hideLoadingState(() => {
+                        showError(job.error || 'Job failed.');
+                    });
                 }
             } catch (pollError) {
                 console.error('Job polling error:', pollError);
@@ -239,8 +825,9 @@ async function sendVideoRequest(file, gender) {
                 jobPollIntervalId = null;
                 pollingFinished = true;
                 currentJobId = null;
-                hideLoadingState();
-                showError('Network error while checking job status. Please try again later.');
+                hideLoadingState(() => {
+                    showError('Network error while checking job status. Please try again later.');
+                });
             }
         };
 
@@ -249,19 +836,54 @@ async function sendVideoRequest(file, gender) {
             console.log('Initial poll reached a terminal state');
             return;
         }
+
         if (jobPollIntervalId === null) {
             jobPollIntervalId = setInterval(pollJob, 3000);
             console.log('Started job polling interval:', jobPollIntervalId);
         }
-    } catch (err) {
+    } catch (error) {
+        console.error('Upload error:', error);
         showError('Network error while uploading. Please try again later.');
-        console.error('Upload error:', err);
     }
 }
 
+function showLoadingState(message) {
+    if (uploadForm) {
+        uploadForm.classList.add('hidden');
+    }
+
+    if (statusText && message) {
+        statusText.textContent = message;
+        statusText.classList.remove('fading');
+    }
+
+    resetProgressStepper();
+    updateProgressFromStatus('pending');
+    setStatusText(message || 'Waiting to start...');
+    setSectionVisibility(resultStage, false);
+    setSectionVisibility(loadingStage, true);
+    console.log('Loading section shown');
+}
+
+function hideLoadingState(callback) {
+    if (uploadForm) {
+        uploadForm.classList.remove('hidden');
+    }
+
+    setSubmitLoading(false);
+    setSectionVisibility(loadingStage, false, callback);
+    console.log('Loading section hidden');
+}
+
+function updateStatusText(status, job) {
+    const errorSuffix = job && job.error ? `: ${job.error}` : '';
+    setStatusText(`Current status: ${status}${status === 'failed' ? errorSuffix : ''}`);
+    console.log('Updated status text:', `Current status: ${status}${status === 'failed' ? errorSuffix : ''}`);
+}
+
 function onJobComplete(job) {
-    if (!job || !job.output_gltf_key) {
-        showError('Job completed, but no glTF output key was returned.');
+    if (!job || (!job.output_gltf_key && !job.output_fbx_key)) {
+        showError('Job completed, but no downloadable output key was returned.');
         return;
     }
 
@@ -276,133 +898,185 @@ function onJobComplete(job) {
     }
 
     completedJob = job;
-    resultSection.classList.remove('hidden');
+    populateResultMeta(job);
+    viewerCanvas.classList.remove('model-loaded');
+    setSectionVisibility(resultStage, true);
+    smoothTo('result');
+    updateProgressFromStatus('done');
+    updateDownloadButtonState();
+    showViewerHint();
+
+    if (downloadButton) {
+        downloadButton.classList.remove('button-shimmer-once');
+        requestAnimationFrame(() => {
+            downloadButton.classList.add('button-shimmer-once');
+        });
+    }
 
     const gltfUrl = `https://pub-0506be8f79424807a9442365f3ef284c.r2.dev/${job.output_gltf_key}`;
-    const scene = new THREE.Scene();
-    scene.background = new THREE.Color('#111111');
-
-    const camera = new THREE.PerspectiveCamera(45, 1, 0.1, 1000);
-    const renderer = new THREE.WebGLRenderer({
-        canvas: viewerCanvas,
-        antialias: true,
-        alpha: false
-    });
-    renderer.setPixelRatio(window.devicePixelRatio || 1);
-
-    const ambientLight = new THREE.AmbientLight(0xffffff, 1.4);
-    scene.add(ambientLight);
-
-    const directionalLight = new THREE.DirectionalLight(0xffffff, 1.8);
-    directionalLight.position.set(5, 8, 6);
-    scene.add(directionalLight);
-
-    const controls = new THREE.OrbitControls(camera, renderer.domElement);
-    controls.enableDamping = true;
-    controls.target.set(0, 0, 0);
-
-    const clock = new THREE.Clock();
-    const loader = new THREE.GLTFLoader();
-    let mixer = null;
-    let animationFrameId = null;
-
-    const resizeRenderer = () => {
-        const width = viewerCanvas.clientWidth || viewerCanvas.parentElement.clientWidth || 1;
-        const height = viewerCanvas.clientHeight || 500;
-        renderer.setSize(width, height, false);
-        camera.aspect = width / height;
-        camera.updateProjectionMatrix();
-    };
-
-    const renderFrame = () => {
-        animationFrameId = requestAnimationFrame(renderFrame);
-        const delta = clock.getDelta();
-        if (mixer) {
-            mixer.update(delta);
-        }
-        controls.update();
-        renderer.render(scene, camera);
-    };
-
-    const handleResize = () => {
-        resizeRenderer();
-    };
-
-    window.addEventListener('resize', handleResize);
-    resizeRenderer();
-
+    let pendingResizeObserver = null;
     activeViewer = {
         dispose() {
-            if (animationFrameId !== null) {
-                cancelAnimationFrame(animationFrameId);
+            if (pendingResizeObserver) {
+                pendingResizeObserver.disconnect();
+                pendingResizeObserver = null;
             }
-            window.removeEventListener('resize', handleResize);
-            controls.dispose();
-            renderer.dispose();
         }
     };
 
-    loader.load(
-        gltfUrl,
-        (gltf) => {
-            const model = gltf.scene;
-            scene.add(model);
+    const initializeViewer = () => {
+        console.log('Viewer canvas size at init:', viewerCanvas.clientWidth, viewerCanvas.clientHeight);
 
-            const box = new THREE.Box3().setFromObject(model);
-            const center = box.getCenter(new THREE.Vector3());
-            const size = box.getSize(new THREE.Vector3());
-            const maxDim = Math.max(size.x, size.y, size.z) || 1;
-            const scale = 3 / maxDim;
+        const scene = new THREE.Scene();
+        scene.background = new THREE.Color('#111111');
 
-            model.position.sub(center);
-            model.scale.setScalar(scale);
+        const camera = new THREE.PerspectiveCamera(45, 1, 0.01, 1000);
+        const renderer = new THREE.WebGLRenderer({
+            canvas: viewerCanvas,
+            antialias: true,
+            alpha: false
+        });
+        renderer.setPixelRatio(window.devicePixelRatio || 1);
+        renderer.setClearColor(0x1c1c1f, 1);
 
-            const scaledBox = new THREE.Box3().setFromObject(model);
-            const sphere = scaledBox.getBoundingSphere(new THREE.Sphere());
-            const radius = sphere.radius || 1;
-            const fitHeightDistance = radius / Math.tan(THREE.MathUtils.degToRad(camera.fov * 0.5));
-            const fitWidthDistance = fitHeightDistance / camera.aspect;
-            const distance = Math.max(fitHeightDistance, fitWidthDistance) * 1.25;
+        const ambientLight = new THREE.AmbientLight(0xffffff, 1.6);
+        scene.add(ambientLight);
 
-            camera.position.set(distance * 0.75, radius * 0.6, distance);
-            camera.near = Math.max(radius / 100, 0.01);
-            camera.far = Math.max(distance * 10, 100);
-            camera.lookAt(0, 0, 0);
+        const directionalLight = new THREE.DirectionalLight(0xffffff, 2.1);
+        directionalLight.position.set(5, 8, 6);
+        scene.add(directionalLight);
+
+        const fillLight = new THREE.DirectionalLight(0xffffff, 0.9);
+        fillLight.position.set(-4, 3, -5);
+        scene.add(fillLight);
+
+        const controls = new THREE.OrbitControls(camera, renderer.domElement);
+        controls.enableDamping = true;
+        controls.target.set(0, 0, 0);
+
+        const clock = new THREE.Clock();
+        const loader = new THREE.GLTFLoader();
+        let mixer = null;
+        let animationFrameId = null;
+
+        const resizeRenderer = () => {
+            const width = viewerCanvas.clientWidth || viewerCanvas.parentElement.clientWidth || 1;
+            const height = viewerCanvas.clientHeight || 600;
+            renderer.setSize(width, height, false);
+            camera.aspect = width / height;
             camera.updateProjectionMatrix();
+        };
 
-            controls.target.set(0, 0, 0);
-            controls.minDistance = radius * 0.5;
-            controls.maxDistance = distance * 4;
+        const renderFrame = () => {
+            animationFrameId = requestAnimationFrame(renderFrame);
+            const delta = clock.getDelta();
+            if (mixer) {
+                mixer.update(delta);
+            }
             controls.update();
+            renderer.render(scene, camera);
+        };
 
-            if (gltf.animations && gltf.animations.length > 0) {
-                mixer = new THREE.AnimationMixer(model);
-                mixer.clipAction(gltf.animations[0]).play();
-            }
+        const handleResize = () => {
+            resizeRenderer();
+        };
 
-            renderFrame();
-            showSuccess('Motion capture complete. 3D result loaded.');
-        },
-        undefined,
-        (error) => {
-            console.error('Failed to load glTF:', error);
-            if (activeViewer) {
-                activeViewer.dispose();
-                activeViewer = null;
+        window.addEventListener('resize', handleResize);
+        resizeRenderer();
+        renderFrame();
+
+        activeViewer = {
+            dispose() {
+                if (animationFrameId !== null) {
+                    cancelAnimationFrame(animationFrameId);
+                }
+                if (pendingResizeObserver) {
+                    pendingResizeObserver.disconnect();
+                    pendingResizeObserver = null;
+                }
+                window.removeEventListener('resize', handleResize);
+                controls.dispose();
+                renderer.dispose();
             }
-            showError('Motion capture completed, but the 3D model could not be loaded.');
+        };
+
+        loader.load(
+            gltfUrl,
+            (gltf) => {
+                scene.add(gltf.scene);
+
+                const box = new THREE.Box3().setFromObject(gltf.scene);
+                const center = box.getCenter(new THREE.Vector3());
+                const size = box.getSize(new THREE.Vector3());
+                gltf.scene.position.sub(center);
+
+                const maxDim = Math.max(size.x, size.y, size.z) || 1;
+                camera.position.set(0, maxDim * 0.3, maxDim * 2.0);
+                camera.near = Math.max(maxDim / 100, 0.01);
+                camera.far = Math.max(maxDim * 100, 100);
+                camera.updateProjectionMatrix();
+                controls.target.set(0, 0, 0);
+                controls.minDistance = maxDim * 0.35;
+                controls.maxDistance = maxDim * 8;
+                controls.update();
+
+                if (gltf.animations && gltf.animations.length > 0) {
+                    mixer = new THREE.AnimationMixer(gltf.scene);
+                    mixer.clipAction(gltf.animations[0]).play();
+                }
+
+                viewerCanvas.classList.add('model-loaded');
+                showSuccess('Motion capture complete. 3D result loaded.');
+            },
+            undefined,
+            (error) => {
+                console.error('Failed to load glTF:', error);
+                if (activeViewer) {
+                    activeViewer.dispose();
+                    activeViewer = null;
+                }
+                showError('Motion capture completed, but the 3D model could not be loaded.');
+            }
+        );
+    };
+
+    requestAnimationFrame(() => {
+        console.log('Viewer canvas size at init:', viewerCanvas.clientWidth, viewerCanvas.clientHeight);
+
+        if (viewerCanvas.clientWidth > 0 && viewerCanvas.clientHeight > 0) {
+            initializeViewer();
+            return;
         }
-    );
+
+        pendingResizeObserver = new ResizeObserver(() => {
+            console.log('Viewer canvas size at init:', viewerCanvas.clientWidth, viewerCanvas.clientHeight);
+            if (viewerCanvas.clientWidth > 0 && viewerCanvas.clientHeight > 0) {
+                pendingResizeObserver.disconnect();
+                pendingResizeObserver = null;
+                initializeViewer();
+            }
+        });
+        pendingResizeObserver.observe(viewerCanvas);
+    });
 }
 
-function handleDownloadFbx() {
-    if (!completedJob || !completedJob.output_fbx_key) {
-        showError('FBX output is not available for download.');
+function handleDownload() {
+    if (!completedJob) {
+        showError('No completed job is available for download.');
         return;
     }
 
-    const fbxUrl = `https://pub-0506be8f79424807a9442365f3ef284c.r2.dev/${completedJob.output_fbx_key}`;
-    window.open(fbxUrl, '_blank', 'noopener,noreferrer');
+    const key = activeDownloadFormat === 'gltf'
+        ? completedJob.output_gltf_key
+        : completedJob.output_fbx_key;
+
+    if (!key) {
+        showError(`${activeDownloadFormat === 'gltf' ? 'glTF' : 'FBX'} output is not available for download.`);
+        return;
+    }
+
+    const url = `https://pub-0506be8f79424807a9442365f3ef284c.r2.dev/${key}`;
+    window.open(url, '_blank', 'noopener,noreferrer');
 }
 
 function resetForNextJob() {
@@ -416,138 +1090,102 @@ function resetForNextJob() {
         activeViewer = null;
     }
 
+    window.clearTimeout(statusTextTimerId);
+    window.clearTimeout(viewerHintTimerId);
+    window.clearTimeout(resetGuardTimerId);
     currentJobId = null;
     completedJob = null;
 
-    if (resultSection) {
-        resultSection.classList.add('hidden');
-    }
-    if (loadingSection) {
-        loadingSection.classList.add('hidden');
-    }
     if (uploadForm) {
         uploadForm.classList.remove('hidden');
         uploadForm.reset();
     }
+
     if (videoInput) {
         videoInput.value = '';
     }
+
     if (genderSelect) {
-        genderSelect.value = '';
+        setGenderValue('');
     }
+
     if (videoPreview) {
         videoPreview.classList.add('hidden');
     }
+
     if (statusText) {
+        statusText.classList.remove('fading');
         statusText.textContent = 'Waiting to start...';
     }
 
+    if (viewerCanvas) {
+        viewerCanvas.classList.remove('model-loaded');
+    }
+
+    if (resetButton) {
+        resetButton.classList.remove('reset-confirm');
+        resetButton.textContent = 'Process Another Video';
+    }
+
+    setSubmitLoading(false);
+    updateSubmitButtonAvailability(false);
+    updateSelectedFileUI(null);
+    populateResultMeta(null);
+    resetProgressStepper();
+    hideViewerHint();
+    setDownloadFormat('fbx');
+    updateDownloadButtonState();
+    setSectionVisibility(loadingStage, false);
+    setSectionVisibility(resultStage, false);
+    smoothTo('upload');
     clearMessages();
 }
 
-function showLoadingState(message) {
-    if (uploadForm) {
-        uploadForm.classList.add('hidden');
-    }
-    if (loadingSection) {
-        loadingSection.classList.remove('hidden');
-    }
-    if (statusText && message) {
-        statusText.textContent = message;
-    }
-    console.log('Loading section shown');
-}
-
-function hideLoadingState() {
-    if (loadingSection) {
-        loadingSection.classList.add('hidden');
-    }
-    if (uploadForm) {
-        uploadForm.classList.remove('hidden');
-    }
-    console.log('Loading section hidden');
-}
-
-function updateStatusText(status, job) {
-    if (!statusText) {
-        return;
-    }
-
-    const errorSuffix = job && job.error ? `: ${job.error}` : '';
-    statusText.textContent = `Current status: ${status}${status === 'failed' ? errorSuffix : ''}`;
-    console.log('Updated status text:', statusText.textContent);
-}
-
-/**
- * Display video preview information
- */
 function displayPreview(file, gender) {
     const videoElement = document.createElement('video');
     videoElement.preload = 'metadata';
 
     videoElement.onloadedmetadata = function () {
         const duration = videoElement.duration;
-
-        const videoDetails = {
-            fileName: file.name,
-            fileSize: formatFileSize(file.size),
-            duration: `${duration.toFixed(2)} seconds`,
-            gender: gender.charAt(0).toUpperCase() + gender.slice(1)
-        };
-
-        document.getElementById('previewFileName').textContent = videoDetails.fileName;
-        document.getElementById('previewFileSize').textContent = videoDetails.fileSize;
-        document.getElementById('previewDuration').textContent = videoDetails.duration;
-        document.getElementById('previewGender').textContent = videoDetails.gender;
-
+        document.getElementById('previewFileName').textContent = file.name;
+        document.getElementById('previewFileSize').textContent = formatFileSize(file.size);
+        document.getElementById('previewDuration').textContent = `${duration.toFixed(2)} seconds`;
+        document.getElementById('previewGender').textContent = `${gender.charAt(0).toUpperCase()}${gender.slice(1)}`;
         videoPreview.classList.remove('hidden');
     };
 
     videoElement.src = URL.createObjectURL(file);
 }
 
-/**
- * Show error message
- */
 function showError(message) {
+    setSubmitLoading(false);
     errorMessage.textContent = message;
     errorMessage.classList.add('show');
     successMessage.classList.remove('show');
 }
 
-/**
- * Show success message
- */
 function showSuccess(message) {
     successMessage.textContent = message;
     successMessage.classList.add('show');
     errorMessage.classList.remove('show');
 }
 
-/**
- * Clear all messages
- */
 function clearMessages() {
     errorMessage.classList.remove('show');
     successMessage.classList.remove('show');
 }
 
-/**
- * Format file size in human-readable format
- */
 function formatFileSize(bytes) {
-    if (bytes === 0) return '0 Bytes';
+    if (bytes === 0) {
+        return '0 Bytes';
+    }
 
     const k = 1024;
     const sizes = ['Bytes', 'KB', 'MB', 'GB'];
     const i = Math.floor(Math.log(bytes) / Math.log(k));
-
     return Math.round((bytes / Math.pow(k, i)) * 100) / 100 + ' ' + sizes[i];
 }
 
-/**
- * Check allowed video formats
- */
 function isAllowedVideo(file) {
     const allowedExtensions = ['mp4', 'mov', 'avi', 'mkv'];
     const allowedMimeTypes = [
@@ -560,9 +1198,33 @@ function isAllowedVideo(file) {
     const name = (file.name || '').toLowerCase();
     const ext = name.includes('.') ? name.split('.').pop() : '';
     const type = (file.type || '').toLowerCase();
+    return Boolean((ext && allowedExtensions.includes(ext)) || (type && allowedMimeTypes.includes(type)));
+}
 
-    const extOk = ext && allowedExtensions.includes(ext);
-    const mimeOk = type && allowedMimeTypes.includes(type);
+function formatDisplayDate(value) {
+    if (!value) {
+        return '—';
+    }
 
-    return Boolean(extOk || mimeOk);
+    const parsed = new Date(value);
+    if (Number.isNaN(parsed.getTime())) {
+        return value;
+    }
+
+    return parsed.toLocaleString();
+}
+
+function populateResultMeta(job) {
+    if (resultJobId) {
+        resultJobId.textContent = job && job.job_id ? job.job_id : '—';
+    }
+
+    if (resultGender) {
+        const gender = (genderSelect && genderSelect.value) || (job && job.gender) || '';
+        resultGender.textContent = gender ? `${gender.charAt(0).toUpperCase()}${gender.slice(1)}` : '—';
+    }
+
+    if (resultCreatedAt) {
+        resultCreatedAt.textContent = formatDisplayDate(job && job.created_at);
+    }
 }
