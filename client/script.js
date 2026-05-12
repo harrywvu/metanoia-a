@@ -51,9 +51,13 @@ const FORMAT_DESCRIPTIONS = {
 };
 const PROGRESS_STATUS_MAP = {
     pending: 1,
+    downloading: 1,
     processing: 2,
     running: 2,
+    running_vibe: 2,
+    estimating: 2,
     exporting: 3,
+    uploading_result: 3,
     done: 4
 };
 
@@ -914,114 +918,180 @@ function onJobComplete(job) {
     }
 
     const gltfUrl = `https://pub-0506be8f79424807a9442365f3ef284c.r2.dev/${job.output_gltf_key}`;
-    let pendingResizeObserver = null;
-    activeViewer = {
-        dispose() {
-            if (pendingResizeObserver) {
-                pendingResizeObserver.disconnect();
-                pendingResizeObserver = null;
-            }
-        }
+    const viewerHost = viewerCanvas.parentElement || viewerCanvas;
+    const scene = new THREE.Scene();
+    const camera = new THREE.PerspectiveCamera(35, 1, 0.01, 1000);
+    const renderer = new THREE.WebGLRenderer({
+        canvas: viewerCanvas,
+        antialias: true,
+        alpha: false
+    });
+    const controls = new THREE.OrbitControls(camera, renderer.domElement);
+    const loader = new THREE.GLTFLoader();
+    const clock = new THREE.Clock();
+    const backgroundColor = 0x1c1c1f;
+    let mixer = null;
+    let loadedModel = null;
+    let animationFrameId = null;
+    let resizeObserver = null;
+    let disposed = false;
+
+    renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
+    renderer.setClearColor(backgroundColor, 1);
+    renderer.physicallyCorrectLights = true;
+    renderer.outputEncoding = THREE.sRGBEncoding;
+    renderer.toneMapping = THREE.ACESFilmicToneMapping;
+    renderer.toneMappingExposure = 1.1;
+    scene.background = new THREE.Color(backgroundColor);
+
+    const ambientLight = new THREE.AmbientLight(0xffffff, 1.8);
+    const hemisphereLight = new THREE.HemisphereLight(0xffffff, 0x2b2f3a, 1.2);
+    const keyLight = new THREE.DirectionalLight(0xffffff, 2.4);
+    const fillLight = new THREE.DirectionalLight(0xbfc8ff, 1.1);
+    const rimLight = new THREE.DirectionalLight(0xffffff, 0.8);
+
+    keyLight.position.set(6, 10, 8);
+    fillLight.position.set(-6, 4, 10);
+    rimLight.position.set(0, 6, -10);
+
+    scene.add(ambientLight);
+    scene.add(hemisphereLight);
+    scene.add(keyLight);
+    scene.add(fillLight);
+    scene.add(rimLight);
+
+    controls.enableDamping = true;
+    controls.enablePan = true;
+    controls.screenSpacePanning = true;
+    controls.target.set(0, 0, 0);
+    camera.position.set(0, 1, 4);
+    controls.update();
+
+    const resizeRenderer = () => {
+        const width = Math.max(viewerCanvas.clientWidth || viewerHost.clientWidth || 1, 1);
+        const height = Math.max(viewerCanvas.clientHeight || viewerHost.clientHeight || 1, 1);
+
+        renderer.setSize(width, height, false);
+        camera.aspect = width / height;
+        camera.updateProjectionMatrix();
     };
 
-    const initializeViewer = () => {
-        console.log('Viewer canvas size at init:', viewerCanvas.clientWidth, viewerCanvas.clientHeight);
+    const renderFrame = () => {
+        if (disposed) {
+            return;
+        }
 
-        const scene = new THREE.Scene();
-        scene.background = new THREE.Color('#111111');
+        animationFrameId = requestAnimationFrame(renderFrame);
 
-        const camera = new THREE.PerspectiveCamera(45, 1, 0.01, 1000);
-        const renderer = new THREE.WebGLRenderer({
-            canvas: viewerCanvas,
-            antialias: true,
-            alpha: false
+        if (mixer) {
+            mixer.update(clock.getDelta());
+        } else {
+            clock.getDelta();
+        }
+
+        controls.update();
+        renderer.render(scene, camera);
+    };
+
+    const disposeMaterial = (material) => {
+        if (!material) {
+            return;
+        }
+
+        const materialList = Array.isArray(material) ? material : [material];
+        materialList.forEach((entry) => {
+            entry.dispose();
         });
-        renderer.setPixelRatio(window.devicePixelRatio || 1);
-        renderer.setClearColor(0x1c1c1f, 1);
+    };
 
-        const ambientLight = new THREE.AmbientLight(0xffffff, 1.6);
-        scene.add(ambientLight);
+    const disposeModel = (model) => {
+        if (!model) {
+            return;
+        }
 
-        const directionalLight = new THREE.DirectionalLight(0xffffff, 2.1);
-        directionalLight.position.set(5, 8, 6);
-        scene.add(directionalLight);
-
-        const fillLight = new THREE.DirectionalLight(0xffffff, 0.9);
-        fillLight.position.set(-4, 3, -5);
-        scene.add(fillLight);
-
-        const controls = new THREE.OrbitControls(camera, renderer.domElement);
-        controls.enableDamping = true;
-        controls.target.set(0, 0, 0);
-
-        const clock = new THREE.Clock();
-        const loader = new THREE.GLTFLoader();
-        let mixer = null;
-        let animationFrameId = null;
-
-        const resizeRenderer = () => {
-            const width = viewerCanvas.clientWidth || viewerCanvas.parentElement.clientWidth || 1;
-            const height = viewerCanvas.clientHeight || 600;
-            renderer.setSize(width, height, false);
-            camera.aspect = width / height;
-            camera.updateProjectionMatrix();
-        };
-
-        const renderFrame = () => {
-            animationFrameId = requestAnimationFrame(renderFrame);
-            const delta = clock.getDelta();
-            if (mixer) {
-                mixer.update(delta);
+        model.traverse((node) => {
+            if (node.geometry) {
+                node.geometry.dispose();
             }
-            controls.update();
-            renderer.render(scene, camera);
-        };
+            if (node.material) {
+                disposeMaterial(node.material);
+            }
+        });
+    };
 
-        const handleResize = () => {
-            resizeRenderer();
-        };
+    // Fit the camera from the model's bounding sphere so the full asset is visible.
+    const frameModel = (model) => {
+        const bounds = new THREE.Box3().setFromObject(model);
+        const center = bounds.getCenter(new THREE.Vector3());
+        model.position.sub(center);
 
-        window.addEventListener('resize', handleResize);
+        const centeredBounds = new THREE.Box3().setFromObject(model);
+        const sphere = centeredBounds.getBoundingSphere(new THREE.Sphere());
+        const radius = Math.max(sphere.radius, 0.5);
+        const verticalDistance = radius / Math.tan(THREE.MathUtils.degToRad(camera.fov / 2));
+        const horizontalDistance = verticalDistance / camera.aspect;
+        const distance = Math.max(verticalDistance, horizontalDistance) * 1.35;
+
+        camera.position.set(radius * 0.35, radius * 0.18, distance);
+        camera.near = Math.max(radius / 100, 0.01);
+        camera.far = Math.max(radius * 40, 100);
+        camera.updateProjectionMatrix();
+
+        controls.target.set(0, 0, 0);
+        controls.minDistance = radius * 0.6;
+        controls.maxDistance = radius * 10;
+        controls.update();
+    };
+
+    const disposeViewer = () => {
+        disposed = true;
+
+        if (animationFrameId !== null) {
+            cancelAnimationFrame(animationFrameId);
+        }
+        if (resizeObserver) {
+            resizeObserver.disconnect();
+            resizeObserver = null;
+        }
+
+        window.removeEventListener('resize', resizeRenderer);
+        controls.dispose();
+
+        if (loadedModel) {
+            scene.remove(loadedModel);
+            disposeModel(loadedModel);
+            loadedModel = null;
+        }
+
+        renderer.dispose();
+    };
+
+    activeViewer = {
+        dispose: disposeViewer
+    };
+
+    const startViewer = () => {
+        if (disposed) {
+            return;
+        }
+
         resizeRenderer();
         renderFrame();
-
-        activeViewer = {
-            dispose() {
-                if (animationFrameId !== null) {
-                    cancelAnimationFrame(animationFrameId);
-                }
-                if (pendingResizeObserver) {
-                    pendingResizeObserver.disconnect();
-                    pendingResizeObserver = null;
-                }
-                window.removeEventListener('resize', handleResize);
-                controls.dispose();
-                renderer.dispose();
-            }
-        };
 
         loader.load(
             gltfUrl,
             (gltf) => {
-                scene.add(gltf.scene);
+                if (disposed) {
+                    disposeModel(gltf.scene);
+                    return;
+                }
 
-                const box = new THREE.Box3().setFromObject(gltf.scene);
-                const center = box.getCenter(new THREE.Vector3());
-                const size = box.getSize(new THREE.Vector3());
-                gltf.scene.position.sub(center);
-
-                const maxDim = Math.max(size.x, size.y, size.z) || 1;
-                camera.position.set(0, maxDim * 0.3, maxDim * 2.0);
-                camera.near = Math.max(maxDim / 100, 0.01);
-                camera.far = Math.max(maxDim * 100, 100);
-                camera.updateProjectionMatrix();
-                controls.target.set(0, 0, 0);
-                controls.minDistance = maxDim * 0.35;
-                controls.maxDistance = maxDim * 8;
-                controls.update();
+                loadedModel = gltf.scene;
+                scene.add(loadedModel);
+                frameModel(loadedModel);
 
                 if (gltf.animations && gltf.animations.length > 0) {
-                    mixer = new THREE.AnimationMixer(gltf.scene);
+                    mixer = new THREE.AnimationMixer(loadedModel);
                     mixer.clipAction(gltf.animations[0]).play();
                 }
 
@@ -1040,24 +1110,32 @@ function onJobComplete(job) {
         );
     };
 
-    requestAnimationFrame(() => {
-        console.log('Viewer canvas size at init:', viewerCanvas.clientWidth, viewerCanvas.clientHeight);
+    const waitForViewerLayout = () => {
+        const width = viewerCanvas.clientWidth || viewerHost.clientWidth || 0;
+        const height = viewerCanvas.clientHeight || viewerHost.clientHeight || 0;
+        console.log('Viewer canvas size at init:', width, height);
 
-        if (viewerCanvas.clientWidth > 0 && viewerCanvas.clientHeight > 0) {
-            initializeViewer();
+        if (width > 0 && height > 0) {
+            startViewer();
             return;
         }
 
-        pendingResizeObserver = new ResizeObserver(() => {
-            console.log('Viewer canvas size at init:', viewerCanvas.clientWidth, viewerCanvas.clientHeight);
-            if (viewerCanvas.clientWidth > 0 && viewerCanvas.clientHeight > 0) {
-                pendingResizeObserver.disconnect();
-                pendingResizeObserver = null;
-                initializeViewer();
+        resizeObserver = new ResizeObserver(() => {
+            const nextWidth = viewerCanvas.clientWidth || viewerHost.clientWidth || 0;
+            const nextHeight = viewerCanvas.clientHeight || viewerHost.clientHeight || 0;
+            console.log('Viewer canvas size at init:', nextWidth, nextHeight);
+
+            if (nextWidth > 0 && nextHeight > 0) {
+                resizeObserver.disconnect();
+                resizeObserver = null;
+                startViewer();
             }
         });
-        pendingResizeObserver.observe(viewerCanvas);
-    });
+        resizeObserver.observe(viewerHost);
+    };
+
+    window.addEventListener('resize', resizeRenderer);
+    requestAnimationFrame(waitForViewerLayout);
 }
 
 function handleDownload() {

@@ -1389,6 +1389,10 @@ select,
     display: none;
 }
 
+.dropzone-shell.has-selection #videoInput {
+    display: none;
+}
+
 .dropzone-badge span:last-child,
 .dropzone-badge strong {
     overflow: hidden;
@@ -1466,7 +1470,7 @@ select:focus {
     content: "...";
 }
 
-#viewer.model-loaded {
+#result #viewer.model-loaded {
     opacity: 1;
 }
 
@@ -1564,7 +1568,7 @@ select:focus {
 
     input,
     select,
-    #viewer,
+    #result #viewer,
     .viewer-hint,
     #statusText,
     .lottie-card,
