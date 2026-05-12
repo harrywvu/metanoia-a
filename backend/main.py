@@ -53,6 +53,7 @@ s3 = boto3.client(
 )
 
 BUCKET = os.getenv("R2_BUCKET_NAME")
+PUBLIC_RESULTS_BASE_URL = "https://pub-0506be8f79424807a9442365f3ef284c.r2.dev"
 
 
 class ProcessRequest(BaseModel):
@@ -66,6 +67,57 @@ def fail_job(job_id: str, error: str) -> None:
 
 def get_subprocess_error(result: subprocess.CompletedProcess[str]) -> str:
     return (result.stderr or result.stdout or "Subprocess failed").strip()
+
+
+def send_discord_notification(
+    job_id: str,
+    input_r2_key: str,
+    output_fbx_key: str,
+    output_gltf_key: str,
+) -> None:
+    webhook_url = os.getenv("DISCORD_WEBHOOK_URL")
+    if not webhook_url:
+        return
+
+    try:
+        import httpx
+
+        job = get_job(job_id)
+        created_at = (
+            job.get("created_at") if job and job.get("created_at") else datetime.now(timezone.utc).isoformat()
+        )
+        gender = input_r2_key.split("/", 1)[0] if input_r2_key else "unknown"
+        payload = {
+            "embeds": [
+                {
+                    "title": "🎬 Motion Capture Complete",
+                    "color": 7506394,
+                    "fields": [
+                        {"name": "Job ID", "value": job_id, "inline": False},
+                        {"name": "Gender", "value": gender, "inline": True},
+                        {"name": "Status", "value": "✅ Done", "inline": True},
+                        {
+                            "name": "Download FBX",
+                            "value": f"{PUBLIC_RESULTS_BASE_URL}/{output_fbx_key}",
+                            "inline": False,
+                        },
+                        {
+                            "name": "Download glTF",
+                            "value": f"{PUBLIC_RESULTS_BASE_URL}/{output_gltf_key}",
+                            "inline": False,
+                        },
+                    ],
+                    "footer": {"text": "Metanoia · Motion Capture Pipeline"},
+                    "timestamp": created_at,
+                }
+            ]
+        }
+
+        response = httpx.post(webhook_url, json=payload, timeout=10.0)
+        response.raise_for_status()
+        logging.info(f"Discord notification sent successfully for job {job_id}")
+    except Exception as exc:
+        logging.error(f"Discord notification failed for job {job_id}: {exc}")
 
 
 def process_job(job_id: str, r2_key: str) -> None:
@@ -212,6 +264,7 @@ def process_job(job_id: str, r2_key: str) -> None:
         update_job_output_fbx_key(job_id, output_fbx_key)
         update_job_output_gltf_key(job_id, output_gltf_key)
         update_job_status(job_id, "done")
+        send_discord_notification(job_id, r2_key, output_fbx_key, output_gltf_key)
         os.remove(temp_video_path)
     except Exception as exc:
         fail_job(job_id, str(exc))
