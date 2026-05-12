@@ -22,6 +22,7 @@ from db import (
     init_db,
     update_job_error,
     update_job_output_fbx_key,
+    update_job_output_gltf_key,
     update_job_status,
 )
 
@@ -128,6 +129,7 @@ def process_job(job_id: str, r2_key: str) -> None:
         )
         vibe_output_path = os.path.join(vibe_output_dir, "vibe_output.pkl")
         fbx_output_path = os.path.join(vibe_output_dir, "fbx_output.fbx")
+        gltf_output_path = os.path.join(vibe_output_dir, "model.glb")
         blender_result = subprocess.run(
             [
                 blender_path,
@@ -161,15 +163,54 @@ def process_job(job_id: str, r2_key: str) -> None:
             return
         logging.info(f"Blender completed successfully with FBX path {fbx_output_path}")
 
+        gltf_result = subprocess.run(
+            [
+                blender_path,
+                "--background",
+                "--python",
+                fbx_script_path,
+                "--",
+                "--input",
+                vibe_output_path,
+                "--output",
+                gltf_output_path,
+                "--fps_source",
+                "30",
+                "--fps_target",
+                "30",
+                "--gender",
+                gender,
+                "--person_id",
+                "1",
+            ],
+            cwd=vibe_dir,
+            env=blender_env,
+            capture_output=True,
+            text=True,
+        )
+        if gltf_result.returncode != 0:
+            logging.error(
+                f"glTF Blender subprocess failed with exit code {gltf_result.returncode}: {gltf_result.stderr}"
+            )
+            fail_job(job_id, get_subprocess_error(gltf_result))
+            return
+        logging.info(f"glTF export completed successfully with path {gltf_output_path}")
+
         output_fbx_key = f"results/{job_id}/fbx_output.fbx"
+        output_gltf_key = f"results/{job_id}/model.glb"
         try:
             s3.upload_file(fbx_output_path, BUCKET, output_fbx_key)
+            s3.upload_file(gltf_output_path, BUCKET, output_gltf_key)
         except Exception as exc:
-            logging.error(f"R2 upload failed for local path {fbx_output_path}: {exc}")
+            logging.error(
+                f"R2 upload failed for local paths {fbx_output_path} or {gltf_output_path}: {exc}"
+            )
             fail_job(job_id, str(exc))
             return
+        logging.info(f"glTF uploaded successfully to R2 key {output_gltf_key}")
 
         update_job_output_fbx_key(job_id, output_fbx_key)
+        update_job_output_gltf_key(job_id, output_gltf_key)
         update_job_status(job_id, "done")
         os.remove(temp_video_path)
     except Exception as exc:

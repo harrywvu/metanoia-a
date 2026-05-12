@@ -15,12 +15,28 @@ def init_db() -> None:
                 status TEXT,
                 input_r2_key TEXT,
                 output_fbx_key TEXT,
+                output_gltf_key TEXT,
                 output_mp4_key TEXT,
                 error TEXT,
                 created_at TEXT
             )
             """
         )
+        columns = {
+            row[1]
+            for row in conn.execute(
+                """
+                PRAGMA table_info(jobs)
+                """
+            ).fetchall()
+        }
+        if "output_gltf_key" not in columns:
+            conn.execute(
+                """
+                ALTER TABLE jobs
+                ADD COLUMN output_gltf_key TEXT
+                """
+            )
         conn.commit()
 
 
@@ -41,7 +57,7 @@ def get_job(job_id: str) -> dict[str, Any] | None:
         conn.row_factory = sqlite3.Row
         row = conn.execute(
             """
-            SELECT job_id, status, input_r2_key, output_fbx_key, output_mp4_key, error, created_at
+            SELECT job_id, status, input_r2_key, output_fbx_key, output_gltf_key, output_mp4_key, error, created_at
             FROM jobs
             WHERE job_id = ?
             """,
@@ -89,5 +105,18 @@ def update_job_output_fbx_key(job_id: str, output_fbx_key: str) -> None:
             WHERE job_id = ?
             """,
             (output_fbx_key, job_id),
+        )
+        conn.commit()
+
+
+def update_job_output_gltf_key(job_id: str, output_gltf_key: str) -> None:
+    with sqlite3.connect(DB_PATH) as conn:
+        conn.execute(
+            """
+            UPDATE jobs
+            SET output_gltf_key = ?
+            WHERE job_id = ?
+            """,
+            (output_gltf_key, job_id),
         )
         conn.commit()
