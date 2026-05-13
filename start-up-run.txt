@@ -36,3 +36,10 @@ NOTES
 - To check person IDs in output:
   python -c "import joblib; d = joblib.load('output/sample_video/vibe_output.pkl'); print(list(d.keys()))"
 - If VRAM runs out, lower --vibe_batch_size further (try 32)
+
+
+
+BACKEND LOCAL STARTUP CHECKLIST
+
+pip install -r requirements.txt
+
