@@ -102,6 +102,19 @@ User downloads FBX
 
 ## Setup
 
+### Backend Dependencies
+pip install -r backend/requirements.txt
+
+### VIBE Dependencies
+# Option 1 — restore full conda environment
+conda env create -f vibe-environment.yml
+
+# Option 2 — manual install if Option 1 fails due to CUDA mismatch
+conda create -n vibe-env python=3.7
+conda activate vibe-env
+pip install torch==1.8.1+cu111 torchvision==0.5.0 -f https://download.pytorch.org/whl/torch_stable.html
+pip install -r VIBE/requirements.txt
+
 ### Prerequisites
 
 - Python 3.x (backend venv)
