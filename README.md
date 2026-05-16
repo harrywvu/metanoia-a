@@ -16,6 +16,9 @@ Metanoia exists to make mocap accessible. The only input required is a video. No
 
 This project was built as a working MVP to validate the technical feasibility of a video-to-animation pipeline using open-source ML tooling, with a production-oriented architecture designed for real deployment.
 
+
+![Logo](./diagram_visual.png)
+
 ## Tech Stack
 
 | Layer | Technology |
